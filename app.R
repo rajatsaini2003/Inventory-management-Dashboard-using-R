@@ -1,4 +1,4 @@
-# Load required libraries for dashboard
+# Load required libraries
 library(shiny)
 library(plotly)
 library(dplyr)
@@ -8,15 +8,68 @@ library(forecast)
 library(lubridate)
 library(tidyverse)
 library(shinyjs)
+library(sodium) # For password hashing
+library(RSQLite) # For user database
+library(shinyauthr) # For authentication helpers
 
+# Initialize SQLite database for users
+init_db <- function() {
+  con <- dbConnect(SQLite(), "users.db")
+  if (!dbExistsTable(con, "users")) {
+    dbExecute(con, "CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE,
+      password TEXT,
+      email TEXT UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )")
+  }
+  dbDisconnect(con)
+}
 
+# Initialize database
+init_db()
+
+# Authentication functions
+check_credentials <- function(user, password) {
+  con <- dbConnect(SQLite(), "users.db")
+  on.exit(dbDisconnect(con))
+  
+  query <- sprintf("SELECT password FROM users WHERE username = '%s'", user)
+  result <- dbGetQuery(con, query)
+  
+  if (nrow(result) == 1) {
+    stored_hash <- result$password
+    return(password_verify(stored_hash, password))
+  }
+  return(FALSE)
+}
+
+# Create user function
+create_user <- function(username, password, email) {
+  con <- dbConnect(SQLite(), "users.db")
+  on.exit(dbDisconnect(con))
+  
+  hashed_password <- password_store(password)
+  
+  tryCatch({
+    query <- sprintf(
+      "INSERT INTO users (username, password, email) VALUES ('%s', '%s', '%s')",
+      username, hashed_password, email
+    )
+    dbExecute(con, query)
+    return(TRUE)
+  }, error = function(e) {
+    return(FALSE)
+  })
+}
 # Load model data
 final_model <- readRDS("final_model.rds")
 test_data <- readRDS("test_data.rds")
 final_predictions <- readRDS("final_predictions.rds")
 
 # Load sales data
-# Load sales data
+
 sales_data <- try(read_excel("F:\\CODING\\R\\New Folder\\final.xlsx"))
 if(inherits(sales_data, "try-error")) {
   # Create sample sales data if file not found
@@ -37,7 +90,120 @@ if(is.data.frame(sales_data)) {
 }
 
 
-ui <- fluidPage(
+# UI Components
+
+# Login Page UI
+loginUI <- function(id) {
+  ns <- NS(id)
+  
+  div(
+    class = "login-container",
+    style = "max-width: 400px; margin: 100px auto; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);",
+    
+    h2("Login", style = "text-align: center; color: #2c3e50;"),
+    
+    textInput("username", "Username"),
+    passwordInput("password", "Password"),
+    
+    div(
+      style = "text-align: center; margin-top: 20px;",
+      actionButton("login", "Login", 
+                   class = "btn-primary",
+                   style = "width: 100%; margin-bottom: 10px;"),
+      
+      actionButton("goto_signup", "Sign Up",
+                   class = "btn-info",
+                   style = "width: 100%;")
+    )
+  )
+}
+
+# Sign Up Page UI
+signupUI <- function(id) {
+  ns <- NS(id)
+  
+  div(
+    class = "signup-container",
+    style = "max-width: 400px; margin: 100px auto; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);",
+    
+    h2("Sign Up", style = "text-align: center; color: #2c3e50;"),
+    
+    textInput("username", "Username"),
+    textInput("email", "Email"),
+    passwordInput("password", "Password"),
+    passwordInput("confirm_password", "Confirm Password"),
+    
+    div(
+      style = "text-align: center; margin-top: 20px;",
+      actionButton("signup", "Sign Up", 
+                   class = "btn-primary",
+                   style = "width: 100%; margin-bottom: 10px;"),
+      
+      actionButton("goto_login", "Back to Login",
+                   class = "btn-info",
+                   style = "width: 100%;")
+    )
+  )
+}
+
+# Home Page UI
+homeUI <- function(id) {
+  ns <- NS(id)
+  
+  div(
+    class = "home-container",
+    style = "padding: 20px;",
+    
+    # Hero Section
+    div(
+      class = "hero",
+      style = "text-align: center; padding: 60px 20px; background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%); color: white; border-radius: 8px; margin-bottom: 40px;",
+      
+      h1("Welcome to Sales Analytics Dashboard", 
+         style = "font-size: 2.5em; margin-bottom: 20px;"),
+      p("Comprehensive sales analysis and forecasting platform",
+        style = "font-size: 1.2em; margin-bottom: 30px;"),
+      actionButton("goto_dashboard", "Go to Dashboard",
+                   class = "btn-primary",
+                   style = "font-size: 1.2em; padding: 10px 30px;")
+    ),
+    
+    # Features Section
+    fluidRow(
+      style = "margin-bottom: 40px;",
+      
+      column(4,
+             div(class = "feature-card",
+                 style = "background: white; padding: 20px; border-radius: 8px; text-align: center; height: 250px;",
+                 icon("chart-line", "fa-3x", style = "color: #3498db; margin-bottom: 20px;"),
+                 h3("Real-time Analytics"),
+                 p("Track your sales performance with interactive charts and real-time updates")
+             )
+      ),
+      
+      column(4,
+             div(class = "feature-card",
+                 style = "background: white; padding: 20px; border-radius: 8px; text-align: center; height: 250px;",
+                 icon("robot", "fa-3x", style = "color: #3498db; margin-bottom: 20px;"),
+                 h3("AI-Powered Forecasting"),
+                 p("Make data-driven decisions with our advanced forecasting algorithms")
+             )
+      ),
+      
+      column(4,
+             div(class = "feature-card",
+                 style = "background: white; padding: 20px; border-radius: 8px; text-align: center; height: 250px;",
+                 icon("file-export", "fa-3x", style = "color: #3498db; margin-bottom: 20px;"),
+                 h3("Custom Reports"),
+                 p("Generate and export customized reports for your business needs")
+             )
+      )
+    )
+  )
+}
+
+dashboardUI <- function(id) {
+  fluidPage(
   useShinyjs(),
   
   tags$head(
@@ -373,15 +539,131 @@ ui <- fluidPage(
                       div(class = "card",
                           h3("Forecast Results"),
                           DTOutput("forecast_table"))
-         )    )
+             )    )
     )
   )
 )
+}
 
 
-# Server
+# Modified UI
+ui <- function(request) {
+  fluidPage(
+    useShinyjs(),
+    
+    # Include custom CSS
+    tags$head(
+      tags$style(HTML("
+        /* Your existing CSS styles */
+        
+        /* Additional styles for authentication pages */
+        .auth-container {
+          max-width: 400px;
+          margin: 100px auto;
+          padding: 20px;
+          background: white;
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .btn-primary {
+          background-color: #3498db;
+          border-color: #3498db;
+          color: white;
+          transition: all 0.3s ease;
+        }
+        
+        .btn-primary:hover {
+          background-color: #2980b9;
+          border-color: #2980b9;
+        }
+        
+        .feature-card {
+          transition: transform 0.3s ease;
+        }
+        
+        .feature-card:hover {
+          transform: translateY(-10px);
+        }
+      "))
+    ),
+    
+    # Navigation state
+    uiOutput("page")
+  )
+}
+
+# Server logic
 server <- function(input, output, session) {
-  # Filtered sales data
+  # Authentication state
+  credentials <- reactiveVal(NULL)
+  current_page <- reactiveVal("home")
+  
+  # Page routing
+  output$page <- renderUI({
+    if (is.null(credentials())) {
+      switch(current_page(),
+             "home" = homeUI("home"),
+             "login" = loginUI("login"),
+             "signup" = signupUI("signup"),
+              "main" = dashboardUI("main"))
+    } else {
+      # Your existing dashboard UI code
+      current_page("main")
+    }
+  })
+  
+  # Login handler
+  observeEvent(input$login, {
+    if (check_credentials(input$username, input$password)) {
+      
+      current_page("main")
+      showNotification("successfull")
+    } else {
+      showNotification("Invalid credentials", type = "error")
+    }
+  })
+  
+  # Signup handler
+  observeEvent(input$signup, {
+    if (input$password != input$confirm_password) {
+      showNotification("Passwords don't match!", type = "error")
+      return()
+    }
+    
+    if (create_user(input$username, input$password, input$email)) {
+      current_page("main")
+      showNotification("successfull")
+    } else {
+      showNotification("Username or email already exists", type = "error")
+    }
+  })
+  
+  # Navigation handlers
+  observeEvent(input$goto_dashboard, {
+    if (is.null(credentials())) {
+      current_page("login")
+    }
+    else{
+      current_page("main")
+    }
+  })
+  
+  observeEvent(input$goto_signup, {
+    current_page("signup")
+  })
+  
+  observeEvent(input$goto_login, {
+    current_page("login")
+  })
+  
+  # Logout handler
+  observeEvent(input$logout, {
+    credentials(NULL)
+    current_page("home")
+  })
+  
+  # Your existing server logic here
   filtered_sales <- reactive({
     query <- sales_data
     
@@ -618,7 +900,6 @@ server <- function(input, output, session) {
     growth <- ((last_predicted - last_actual) / last_actual) * 100
     paste0(round(growth, 1), "%")
   })
-  
 }
 
 # Run the application
