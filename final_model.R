@@ -6,7 +6,7 @@ library(tidyverse)
 library(zoo)
 
 # IMPORTING DATA
-ml_data <- read.csv("F://CODING//R//New Folder//ml_data.csv")
+ml_data <- read.csv("ml_data.csv")
 
 # Feature engineering
 ml_data <- ml_data %>%

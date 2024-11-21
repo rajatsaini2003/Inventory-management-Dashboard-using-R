@@ -7,10 +7,19 @@ library(DT)
 library(forecast)
 library(lubridate)
 library(tidyverse)
+library(xgboost)
 library(shinyjs)
 library(sodium) # For password hashing
 library(RSQLite) # For user database
 library(shinyauthr) # For authentication helpers
+library(googleAuthR)
+library(httr)
+library(jsonlite)
+
+readRenviron("./.env")
+google_client_id <- Sys.getenv("GOOGLE_CLIENT_ID")
+google_client_secret <- Sys.getenv("GOOGLE_CLIENT_SECRET")
+google_redirect_uri <- Sys.getenv("GOOGLE_REDIRECT_URI")
 
 # Initialize SQLite database for users
 init_db <- function() {
@@ -21,6 +30,9 @@ init_db <- function() {
       username TEXT UNIQUE,
       password TEXT,
       email TEXT UNIQUE,
+      google_id TEXT UNIQUE,
+      google_email TEXT,
+      profile_picture TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )")
   }
@@ -69,18 +81,8 @@ test_data <- readRDS("test_data.rds")
 final_predictions <- readRDS("final_predictions.rds")
 
 # Load sales data
+sales_data <- try(read_excel("Final.xlsx"))
 
-sales_data <- try(read_excel("F:\\CODING\\R\\New Folder\\final.xlsx"))
-if(inherits(sales_data, "try-error")) {
-  # Create sample sales data if file not found
-  sales_data <- data.frame(
-    Date = seq(as.Date("2023-01-01"), by="day", length.out=200),
-    `Product Category` = sample(c("Category A", "Category B", "Category C"), 200, replace=TRUE),
-    Region = sample(c("North", "South", "East", "West"), 200, replace=TRUE),
-    `Units Sold` = round(runif(200, 100, 1000)),
-    Revenue = round(runif(200, 1000, 10000), 2)
-  )
-}
 
 if(is.data.frame(sales_data)) {
   sales_data <- sales_data[1:200, ]
@@ -110,11 +112,23 @@ loginUI <- function(id) {
       actionButton("login", "Login", 
                    class = "btn-primary",
                    style = "width: 100%; margin-bottom: 10px;"),
-      
+      tags$hr(style = "margin: 20px 0;"),
+      div(class = "auth-switch",
+          "Or sign in with:",
+      ),
+          actionButton("google_signin", "Sign in with Google",
+                       class = "auth-btn",
+                       style = "background-color: #4285f4; margin-top: 10px;",
+                       icon = icon("google")
+          ),
+      div(
+        "Don't have an account?",
       actionButton("goto_signup", "Sign Up",
                    class = "btn-info",
-                   style = "width: 100%;")
+                   style = "width: 100%;"),
+      )
     )
+    
   )
 }
 
@@ -138,10 +152,21 @@ signupUI <- function(id) {
       actionButton("signup", "Sign Up", 
                    class = "btn-primary",
                    style = "width: 100%; margin-bottom: 10px;"),
-      
+      tags$hr(style = "margin: 20px 0;"),
+      div(class = "auth-switch",
+          "Or sign in with:",
+      ),
+      actionButton("google_signin", "Sign in with Google",
+                   class = "auth-btn",
+                   style = "background-color: #4285f4; margin-top: 10px;",
+                   icon = icon("google")
+      ),
+      div(
+        "Already an account?",
       actionButton("goto_login", "Back to Login",
                    class = "btn-info",
                    style = "width: 100%;")
+      )
     )
   )
 }
@@ -550,6 +575,13 @@ dashboardUI <- function(id) {
 ui <- function(request) {
   fluidPage(
     useShinyjs(),
+    tags$head(
+      tags$script("
+        Shiny.addCustomMessageHandler('redirectToGoogle', function(authUrl) {
+          window.location.href = authUrl;
+        });
+      ")
+    ),
     
     # Include custom CSS
     tags$head(
@@ -591,6 +623,120 @@ ui <- function(request) {
     # Navigation state
     uiOutput("page")
   )
+}
+
+## Google OAuth
+# Add these Google authentication functions
+setup_google_auth <- function() {
+  #print("heresetup")
+  options(googleAuthR.scopes.selected = c(
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile"
+  ))
+  
+  # Replace with your OAuth credentials
+  options(googleAuthR.webapp.client_id =google_client_id,
+          googleAuthR.webapp.client_secret =google_client_secret,
+          googleAuthR.webapp.redirect_uri =google_redirect_uri)
+  # Configure for same window authentication
+  # options(googleAuthR.webapp.use_basic_auth = TRUE,
+  #         googleAuthR.webapp.redirect_on_signout = TRUE,
+  #         googleAuthR.webapp.popup = FALSE)
+}
+
+
+get_google_user_info <- function(access_token) {
+  # Get user info from Google using the access token directly in the header
+  response <- GET(
+    "https://www.googleapis.com/oauth2/v1/userinfo",
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+  
+  if (status_code(response) == 200) {
+    user_info <- fromJSON(rawToChar(response$content))
+    return(user_info)
+  }
+  return(NULL)
+}
+# Handle the OAuth code exchange and user authentication
+handle_google_auth <- function(code, session) {
+  #print("herehandle")
+  # Exchange the authorization code for an access token
+  token_response <- POST(
+    "https://oauth2.googleapis.com/token",
+    body = list(
+      code = code,
+      client_id = google_client_id,
+      client_secret = google_client_secret,
+      redirect_uri = google_redirect_uri,
+      grant_type = "authorization_code"
+    ),
+    encode = "form"
+  )
+  
+  if (status_code(token_response) == 200) {
+    token_data <- fromJSON(rawToChar(token_response$content))
+    access_token <- token_data$access_token
+    
+    # Get user info using the access token
+    user_info <- get_google_user_info(access_token)
+    
+    if (!is.null(user_info)) {
+      # Connect to database
+      con <- dbConnect(SQLite(), "users.db")
+      # Check if user exists
+      existing_user <- dbGetQuery(con, sprintf(
+        "SELECT * FROM users WHERE google_id = '%s' OR email = '%s'",
+        user_info$id, user_info$email
+      ))
+      
+      if (nrow(existing_user) == 0) {
+        # Create new user
+        dbExecute(con, 
+                  "INSERT INTO users (username, email, google_id, google_email, profile_picture) 
+           VALUES (?, ?, ?, ?, ?)",
+                  params = list(
+                    user_info$email,
+                    user_info$email,
+                    user_info$id,
+                    user_info$email,
+                    user_info$picture
+                  )
+        )
+        
+    
+        # Get the newly created user
+        user <- dbGetQuery(con, sprintf(
+          "SELECT * FROM users WHERE google_id = '%s'",
+          user_info$id
+        ))
+      } else {
+        # Update existing user's Google info
+        dbExecute(con,
+                  "UPDATE users SET 
+           google_id = ?, 
+           google_email = ?, 
+           profile_picture = ? 
+           WHERE email = ?",
+                  params = list(
+                    user_info$id,
+                    user_info$email,
+                    user_info$picture,
+                    user_info$email
+                  )
+        )
+        user <- existing_user
+      }
+      
+      # Return user data
+      return(list(
+        username = user_info$email,
+        email = user_info$email,
+        profile_picture = user_info$picture
+      ))
+    }
+  }
+  return(NULL)
 }
 
 # Server logic
@@ -661,6 +807,43 @@ server <- function(input, output, session) {
   observeEvent(input$logout, {
     credentials(NULL)
     current_page("home")
+  })
+  
+  # Setup Google Authentication
+  # Setup Google Authentication
+  setup_google_auth()
+  # Handle Google Sign-In button click
+  observeEvent(input$google_signin, {
+    # Create OAuth URL
+    auth_url <- paste0(
+      "https://accounts.google.com/o/oauth2/v2/auth?",
+      "client_id=", google_client_id,
+      "&redirect_uri=", URLencode(google_redirect_uri, reserved = TRUE),
+      "&response_type=code",
+      "&scope=", URLencode("email profile openid https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email", reserved = TRUE)
+    )
+    
+    # Redirect to Google login
+    session$sendCustomMessage("redirectToGoogle", auth_url)
+  })
+  
+  # Handle the OAuth callback observer
+  observe({
+    query <- parseQueryString(session$clientData$url_search)
+    
+    if (!is.null(query$code)) {
+      # Handle the authorization code
+      user <- handle_google_auth(query$code, session)
+      #print(user)
+      if (!is.null(user)) {
+        credentials<- reactiveVal(user)
+        current_page("main")
+        showNotification("successful login",type="message")
+      } else {
+        showNotification("Failed to authenticate with Google",type="error")
+        current_page("login")
+      }
+    }
   })
   
   # Your existing server logic here
