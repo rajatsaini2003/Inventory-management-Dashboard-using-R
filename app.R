@@ -433,8 +433,21 @@ dashboardUI <- function(id) {
   # Dashboard Header
   div(class = "main-header",
       h1("Integrated Sales Analytics Dashboard", align = "center"),
-      p("Sales Performance Monitoring and Forecasting", align = "center")
+      p("Sales Performance Monitoring and Forecasting", align = "center"),
+      
+        
+        div(
+          class = "dropdown",
+          actionButton(
+            "logout_btn", 
+            "Logout", 
+            icon = icon("sign-out-alt"),
+            style = "margin-top: -20px; margin-right: 10px; background-color: #e74c3c; position: absolute; right:0; color: white;"
+          )
+        )
+      
   ),
+  
   
   # Updated Layout Structure
   fluidRow(
@@ -462,7 +475,10 @@ dashboardUI <- function(id) {
                
                
                
-               downloadButton("download_predictions", "Download Forecast Data")
+               downloadButton("download_predictions", "Download Forecast Data"),
+               fileInput("file", "Upload CSV file with stock data", accept = c("xlxs"), multiple = FALSE),
+               downloadButton("downloadTemplate", "Download Template", 
+                              style = "margin: 15px; width: 90%; background-color: #1abc9c; border: none;"),
            )
     ),
     
@@ -743,6 +759,7 @@ handle_google_auth <- function(code, session) {
 server <- function(input, output, session) {
   # Authentication state
   credentials <- reactiveVal(NULL)
+  user_data <- reactiveVal(NULL)
   current_page <- reactiveVal("home")
   
   # Page routing
@@ -804,9 +821,16 @@ server <- function(input, output, session) {
   })
   
   # Logout handler
-  observeEvent(input$logout, {
+
+  observeEvent(input$logout_btn, {
+    # Clear user data
     credentials(NULL)
     current_page("home")
+    
+    # Reset app state to landing page
+   
+    # Optional: Show a logout notification
+    showNotification("You have been logged out.", type = "message")
   })
   
   # Setup Google Authentication
@@ -1083,6 +1107,76 @@ server <- function(input, output, session) {
     growth <- ((last_predicted - last_actual) / last_actual) * 100
     paste0(round(growth, 1), "%")
   })
+ create_template_dataset <- function() {
+    # Create sample dates
+    dates <- seq(as.Date("2024-01-01"), as.Date("2024-01-05"), by="days")
+    
+    # Create template dataframe
+    template_df <- data.frame(
+        Date = dates,
+        Region = rep(c("North", "South", "East", "West", "Central"), length.out = 5),
+        Product = rep(c("Pain Relief", "Allergy Medication", "Antibiotics", "Vitamins", "Cold & Flu"), length.out = 5),
+        Category = rep(c("OTC", "Prescription", "Supplement", "Specialty", "Generic"), length.out = 5),
+        `Medication Name` = rep(c("Paracetamol", "Antihistamine", "Amoxicillin", "Multivitamin", "Decongestant"), length.out = 5),
+        `Units Sold` = sample(500:1500, 5, replace = TRUE),
+        Revenue = round(runif(5, 5000, 15000), 2),
+        `Customer Age Group` = rep(c("18-30", "31-45", "46-60", "61+", "Under 18"), length.out = 5),
+        `Customer Gender` = rep(c("Male", "Female", "Non-Binary", "Female", "Male"), length.out = 5),
+        `Sales Channel` = rep(c("Online", "Pharmacy", "Hospital", "Retail", "Clinic"), length.out = 5),
+        `Discount Offered` = round(runif(5, 0, 20), 2)
+    )
+    
+    return(template_df)
+}
+  
+ # Function to write template to temp file and get path
+ get_template_path <- function() {
+   # Create template
+   template_df <- create_template_dataset()
+   
+   # Create temp file
+   tmp <- tempfile(fileext = ".csv")
+   write.csv(template_df, tmp, row.names = FALSE)
+   
+   return(tmp)
+ }
+ 
+ output$downloadTemplate <- downloadHandler(
+   filename = function() {
+     paste("sales_template_", format(Sys.Date(), "%Y%m%d"), ".csv", sep="")
+   },
+   content = function(file) {
+     template_path <- get_template_path()
+     file.copy(template_path, file)
+     unlink(template_path)
+   }
+ )
+ observe({
+   req(user_data())
+   sales_data <- uploaded_data()
+ })
+ # Load data from user-uploaded file
+ uploaded_data <- reactive({
+   if (!is.null(input$file)) {
+     data <- read.csv(input$file$datapath)
+     data$Date <- as.Date(data$Date)  # Ensure Date column is in Date format
+     required_cols <- c("Region", "Region", "Product", "Category", "Date")
+     missing_cols <- setdiff(required_cols, colnames(data))
+     
+     if (length(missing_cols) == 0) {
+       return(data)
+     } else {
+       showNotification(
+         paste("Uploaded file is missing required columns:", paste(missing_cols, collapse = ", ")),
+         type = "error"
+       )
+       return(NULL)
+     }
+   } else {
+     return(NULL)
+   }
+ })
+ 
 }
 
 # Run the application
