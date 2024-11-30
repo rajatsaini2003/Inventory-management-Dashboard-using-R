@@ -546,7 +546,7 @@ dashboardUI <- function(id) {
                                    div(class = "metric-card",
                                        h4("Forecast Accuracy"),
                                        div(class="metric-value", textOutput("forecast_accuracy")),
-                                       div(class="metric-label", "MAPE"))
+                                       div(class="metric-label", "Accuracy"))
                                    
                             )
                           )
