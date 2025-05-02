@@ -1,6 +1,9 @@
 # Medical Sales Dashboard and Inventory Management system
 ### **Authors**: Parth Nuwal and Rajat Saini
 
+POWER-BI Dashboard:![image](https://github.com/user-attachments/assets/a03e9212-b51c-4cd3-be0c-d927a722547d)
+
+
 ![Screenshot 2024-11-30 234653](https://github.com/user-attachments/assets/12a81be8-12ca-422f-9f44-40dc9bc030a9) ![image](https://github.com/user-attachments/assets/89de84a4-1532-42eb-ad41-d4037d061e9f) ![image](https://github.com/user-attachments/assets/4dadee50-6f31-419d-9caa-f3175fde2929)
 
 
